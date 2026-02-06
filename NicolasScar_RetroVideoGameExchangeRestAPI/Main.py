@@ -1,14 +1,14 @@
-# this is how ya run the project. I didn't know if i needed to put this or not but i assume i might need to since everyone will likely do something different.
-# pip install -r requirements.txt
-# python -m uvicorn main:app --reload
-# below is the link to see the documentation and you can test the endpoints there as well
-# http://127.0.0.1:8000/docs
+# run by putting in terminal: docker compose up --build
+#link is http://localhost:8080/docs
+
+#I used ChatGPT to help with the new endpoints and the update to the docker-compose and nginx.conf.
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import Optional, List
-from database import users_collection, games_collection
+from database import users_collection, games_collection, trade_offers_collection
 from bson import ObjectId
+from fastapi import Body
 
 app = FastAPI(title="Retro Video Game Exchange")
 
@@ -34,6 +34,13 @@ class Game(BaseModel):
     condition: str
     previous_owners: Optional[int] = None
     owner_email: str
+
+class TradeOffer(BaseModel):
+    from_user_email: str
+    to_user_email: str
+    offered_game_id: str
+    requested_game_id: str
+    status: str = "pending"
 
 # user endpoints
 @app.post("/users", status_code=201)
@@ -118,3 +125,69 @@ def delete_game(game_id: str):
 
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Game not found")
+    
+
+
+    #Trade offer endpoints
+@app.post("/offers", status_code=201)
+def create_offer(offer: TradeOffer):
+    # Check that both users exist
+    from_user = users_collection.find_one({"email": offer.from_user_email})
+    to_user = users_collection.find_one({"email": offer.to_user_email})
+
+    if not from_user or not to_user:
+        raise HTTPException(status_code=404, detail="One or both users not found")
+
+    # Check that offered game exists and belongs to sender
+    offered_game = games_collection.find_one({"_id": ObjectId(offer.offered_game_id)})
+    if not offered_game or offered_game["owner_email"] != offer.from_user_email:
+        raise HTTPException(status_code=404, detail="Offered game not found or not owned by sender")
+
+    # Check that requested game exists
+    requested_game = games_collection.find_one({"_id": ObjectId(offer.requested_game_id)})
+    if not requested_game:
+        raise HTTPException(status_code=404, detail="Requested game not found")
+
+    # Insert the offer into the database
+    offer_dict = offer.dict()
+    trade_offers_collection.insert_one(offer_dict)
+
+    # Return HATEOAS links
+    return {
+        "message": "Trade offer created",
+        "_links": {
+            "self": {"href": "/offers"},
+            "received_offers": {"href": f"/offers/received/{offer.to_user_email}"},
+            "sent_offers": {"href": f"/offers/sent/{offer.from_user_email}"}
+        }
+    }
+
+@app.get("/offers/received/{email}")
+def get_received_offers(email: str):
+    offers = []
+    for offer in trade_offers_collection.find({"to_user_email": email}):
+        offers.append(object_id_to_str(offer))
+    return offers
+
+@app.get("/offers/sent/{email}")
+def get_sent_offers(email: str):
+    offers = []
+    for offer in trade_offers_collection.find({"from_user_email": email}):
+        offers.append(object_id_to_str(offer))
+    return offers
+
+@app.put("/offers/{offer_id}")
+def update_offer_status(offer_id: str, status: str):
+    if status not in ["accepted", "rejected"]:
+        raise HTTPException(status_code=400, detail="Invalid status")
+
+    result = trade_offers_collection.update_one(
+        {"_id": ObjectId(offer_id)},
+        {"$set": {"status": status}}
+    )
+
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Offer not found")
+
+    return {"message": f"Offer {status}"}
+

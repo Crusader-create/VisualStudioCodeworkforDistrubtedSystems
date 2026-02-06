@@ -1,0 +1,25 @@
+services:
+  api1:
+    build: .
+    container_name: retro_api_1
+    environment:
+      MONGO_URI: "mongodb://host.docker.internal:27017/"
+      MONGO_DB_NAME: "retro_exchange"
+
+  api2:
+    build: .
+    container_name: retro_api_2
+    environment:
+      MONGO_URI: "mongodb://host.docker.internal:27017/"
+      MONGO_DB_NAME: "retro_exchange"
+
+  nginx:
+    image: nginx:latest
+    container_name: retro_nginx_lb
+    ports:
+      - "8080:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf
+    depends_on:
+      - api1
+      - api2
