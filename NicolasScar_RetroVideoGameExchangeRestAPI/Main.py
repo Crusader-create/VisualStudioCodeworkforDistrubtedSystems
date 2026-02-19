@@ -1,7 +1,5 @@
 # run by putting in terminal: docker compose up --build
-#link is http://localhost:8080/docs
-
-#I used ChatGPT to help with the new endpoints and the update to the docker-compose and nginx.conf.
+# link: http://localhost:8080/docs
 
 from fastapi import FastAPI, HTTPException, Body
 from pydantic import BaseModel
@@ -71,7 +69,6 @@ def update_user(email: str, update: UserUpdate):
         {"email": email},
         {"$set": update.dict(exclude_none=True)}
     )
-
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="User not found")
     return {"message": "User updated"}
@@ -84,8 +81,11 @@ def change_password(email: str, new_password: str = Body(..., embed=True)):
     
     users_collection.update_one({"email": email}, {"$set": {"password": new_password}})
     
-    # Kafka notification
-    send_message("notifications", {"type": "password_change", "user_email": email})
+    # Kafka notification to user
+    send_message("notifications", {
+        "type": "password_change",
+        "user_email": email
+    })
     
     return {"message": "Password changed"}
 
@@ -155,10 +155,9 @@ def create_offer(offer: TradeOffer):
     if not requested_game:
         raise HTTPException(status_code=404, detail="Requested game not found")
 
-    offer_dict = offer.dict()
-    trade_offers_collection.insert_one(offer_dict)
+    trade_offers_collection.insert_one(offer.dict())
 
-    # Kafka notification
+    # Kafka notification to both users
     send_message("notifications", {
         "type": "offer_created",
         "offeror_email": offer.from_user_email,
@@ -202,7 +201,7 @@ def update_offer_status(offer_id: str, status: str = Body(..., embed=True)):
         {"$set": {"status": status}}
     )
 
-    # Kafka notification
+    # Kafka notification to both users
     send_message("notifications", {
         "type": f"offer_{status}",
         "offeror_email": trade_offer['from_user_email'],
@@ -211,3 +210,6 @@ def update_offer_status(offer_id: str, status: str = Body(..., embed=True)):
 
     return {"message": f"Offer {status}"}
 
+
+
+#http://localhost:8025
