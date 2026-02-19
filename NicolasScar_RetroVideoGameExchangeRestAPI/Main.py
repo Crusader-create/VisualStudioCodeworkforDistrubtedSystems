@@ -3,12 +3,12 @@
 
 #I used ChatGPT to help with the new endpoints and the update to the docker-compose and nginx.conf.
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Body
 from pydantic import BaseModel
 from typing import Optional, List
 from database import users_collection, games_collection, trade_offers_collection
 from bson import ObjectId
-from fastapi import Body
+from kafka_producer import send_message  # updated path
 
 app = FastAPI(title="Retro Video Game Exchange")
 
@@ -16,6 +16,7 @@ def object_id_to_str(item):
     item["_id"] = str(item["_id"])
     return item
 
+# --------------------- Models ---------------------
 class User(BaseModel):
     name: str
     email: str
@@ -42,7 +43,7 @@ class TradeOffer(BaseModel):
     requested_game_id: str
     status: str = "pending"
 
-# user endpoints
+# --------------------- User Endpoints ---------------------
 @app.post("/users", status_code=201)
 def create_user(user: User):
     if users_collection.find_one({"email": user.email}):
@@ -75,7 +76,20 @@ def update_user(email: str, update: UserUpdate):
         raise HTTPException(status_code=404, detail="User not found")
     return {"message": "User updated"}
 
-# game endpoints 
+@app.put("/users/{email}/password")
+def change_password(email: str, new_password: str = Body(..., embed=True)):
+    user = users_collection.find_one({"email": email})
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    users_collection.update_one({"email": email}, {"$set": {"password": new_password}})
+    
+    # Kafka notification
+    send_message("notifications", {"type": "password_change", "user_email": email})
+    
+    return {"message": "Password changed"}
+
+# --------------------- Game Endpoints ---------------------
 @app.post("/games", status_code=201)
 def add_game(game: Game):
     games_collection.insert_one(game.dict())
@@ -114,7 +128,6 @@ def update_game(game_id: str, game: Game):
         {"_id": ObjectId(game_id)},
         {"$set": game.dict()}
     )
-
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Game not found")
     return {"message": "Game updated"}
@@ -122,37 +135,36 @@ def update_game(game_id: str, game: Game):
 @app.delete("/games/{game_id}", status_code=204)
 def delete_game(game_id: str):
     result = games_collection.delete_one({"_id": ObjectId(game_id)})
-
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Game not found")
-    
 
-
-    #Trade offer endpoints
+# --------------------- Trade Offers ---------------------
 @app.post("/offers", status_code=201)
 def create_offer(offer: TradeOffer):
-    # Check that both users exist
     from_user = users_collection.find_one({"email": offer.from_user_email})
     to_user = users_collection.find_one({"email": offer.to_user_email})
 
     if not from_user or not to_user:
         raise HTTPException(status_code=404, detail="One or both users not found")
 
-    # Check that offered game exists and belongs to sender
     offered_game = games_collection.find_one({"_id": ObjectId(offer.offered_game_id)})
     if not offered_game or offered_game["owner_email"] != offer.from_user_email:
         raise HTTPException(status_code=404, detail="Offered game not found or not owned by sender")
 
-    # Check that requested game exists
     requested_game = games_collection.find_one({"_id": ObjectId(offer.requested_game_id)})
     if not requested_game:
         raise HTTPException(status_code=404, detail="Requested game not found")
 
-    # Insert the offer into the database
     offer_dict = offer.dict()
     trade_offers_collection.insert_one(offer_dict)
 
-    # Return HATEOAS links
+    # Kafka notification
+    send_message("notifications", {
+        "type": "offer_created",
+        "offeror_email": offer.from_user_email,
+        "offeree_email": offer.to_user_email
+    })
+
     return {
         "message": "Trade offer created",
         "_links": {
@@ -177,17 +189,25 @@ def get_sent_offers(email: str):
     return offers
 
 @app.put("/offers/{offer_id}")
-def update_offer_status(offer_id: str, status: str):
+def update_offer_status(offer_id: str, status: str = Body(..., embed=True)):
     if status not in ["accepted", "rejected"]:
         raise HTTPException(status_code=400, detail="Invalid status")
 
-    result = trade_offers_collection.update_one(
+    trade_offer = trade_offers_collection.find_one({"_id": ObjectId(offer_id)})
+    if not trade_offer:
+        raise HTTPException(status_code=404, detail="Offer not found")
+
+    trade_offers_collection.update_one(
         {"_id": ObjectId(offer_id)},
         {"$set": {"status": status}}
     )
 
-    if result.matched_count == 0:
-        raise HTTPException(status_code=404, detail="Offer not found")
+    # Kafka notification
+    send_message("notifications", {
+        "type": f"offer_{status}",
+        "offeror_email": trade_offer['from_user_email'],
+        "offeree_email": trade_offer['to_user_email']
+    })
 
     return {"message": f"Offer {status}"}
 
