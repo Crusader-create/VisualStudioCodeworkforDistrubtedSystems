@@ -1,4 +1,3 @@
-version: "3.9"
 
 services:
   mongo:
@@ -6,6 +5,16 @@ services:
     container_name: retro_mongo
     ports:
       - "27017:27017"
+
+  mongo_exporter:
+    image: bitnami/mongodb-exporter:latest
+    container_name: retro_mongo_exporter
+    environment:
+      MONGODB_URI: "mongodb://mongo:27017"
+    ports:
+      - "9216:9216"
+    depends_on:
+      - mongo
 
   zookeeper:
     image: confluentinc/cp-zookeeper:7.4.0
@@ -29,6 +38,16 @@ services:
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
     ports:
       - "9092:9092"
+
+  kafka_exporter:
+    image: danielqsj/kafka-exporter:latest
+    container_name: retro_kafka_exporter
+    environment:
+      KAFKA_BROKERS: "kafka:9092"
+    ports:
+      - "9308:9308"
+    depends_on:
+      - kafka
 
   api:
     build: .
@@ -59,3 +78,14 @@ services:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
     depends_on:
       - api
+
+  prometheus:
+    build:
+      context: ./prometheus
+    container_name: retro_prometheus
+    ports:
+      - "9090:9090"
+    depends_on:
+      - api
+      - mongo_exporter
+      - kafka_exporter

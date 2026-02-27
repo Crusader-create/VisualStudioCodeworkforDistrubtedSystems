@@ -211,5 +211,27 @@ def update_offer_status(offer_id: str, status: str = Body(..., embed=True)):
     return {"message": f"Offer {status}"}
 
 
+from prometheus_client import start_http_server, Counter
+import threading
+
+# Create a metric to count requests
+REQUEST_COUNT = Counter('api_requests_total', 'Total number of API requests', ['endpoint'])
+
+# Middleware to increment counter
+from fastapi import Request
+
+@app.middleware("http")
+async def prometheus_middleware(request: Request, call_next):
+    response = await call_next(request)
+    REQUEST_COUNT.labels(endpoint=request.url.path).inc()
+    return response
+
+# Start Prometheus metrics server on a separate port
+def start_metrics_server():
+    start_http_server(8001)  # Expose metrics on port 8001
+
+threading.Thread(target=start_metrics_server, daemon=True).start()
+
+
 
 #http://localhost:8025

@@ -1,0 +1,15 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: 'fastapi'
+    static_configs:
+      - targets: ['api:8001']  # FastAPI metrics endpoint
+
+  - job_name: 'mongo'
+    static_configs:
+      - targets: ['mongo_exporter:9216']  # Mongo exporter
+
+  - job_name: 'kafka'
+    static_configs:
+      - targets: ['kafka_exporter:9308']  # Kafka exporter
